@@ -8,6 +8,8 @@ const multer = require('multer');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');  // Importación correcta de AWS SDK v3
 const s3Client = require('../../db/awsS3');  // Asegúrate de tener la conexión de AWS configurada correctamente
 const User = require('../../db/user');
+const { ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 
 const imagenes = require('../../db/multimedia');
@@ -20,60 +22,94 @@ const porciones = require('../../db/porciones');
 const { error } = require('console');
 
 
+
 const upload = multer({ storage: multer.memoryStorage()});
 
 //---------------subir imagen al s3 -----------------------
 
-const SubirImagenes = async ( req, res ) => {
-
-    try {
-        const Archivos  = req.files; // Accede al archivo subido
-        const datos     = JSON.parse( req.body.data ); // Obtén el nuevo nombre desde el cliente
+const crearProductos = async ( req, res ) => {
+  
+  try {
+    const Archivos  = req.files; // Accede al archivo subido
+    const datos     = JSON.parse( req.body.data ); // Obtén el nuevo nombre desde el cliente
+    
+    if ( !Archivos || Archivos.length === 0 ) return res.status(400).json({ error: 'No se ha subido ningún archivo' });
+    
+    
+    const { nombreProducto } = datos
+    const Producto           = await registroProductos(datos);
+    const id                 = Producto._id;
+    const imagenesSubidas    = await subirS3(Archivos, id, nombreProducto);
+    // Generar un nombre único para el archivo o usar el proporcionado por el cliente
+    
+    res.json({
       
-        if ( !Archivos || Archivos.length === 0 ) return res.status(400).json({ error: 'No se ha subido ningún archivo' });
-        
-        
-        const { nombreProducto } = datos
-        const Producto           = await registroProductos(datos);
-        const id                 = Producto._id;
-        const imagenesSubidas    = await subirS3(Archivos, id, nombreProducto);
-        // Generar un nombre único para el archivo o usar el proporcionado por el cliente
-       
-        res.json({
-
-            mensaje : 'Productos e imagenes subidas correctamente',
-            Producto,
-            imagenes: imagenesSubidas
-            
-        });
-        
-    } catch ( error ) {
-      console.error('Error al subir el video:', error);
-      res.status(500).json({ error: 'Error al subir el video' });
-    }
+      mensaje : 'Productos e imagenes subidas correctamente',
+      Producto,
+      imagenes: imagenesSubidas
+      
+    });
+    
+  } catch ( error ) {
+    console.error('Error al subir el video:', error);
+    res.status(500).json({ error: 'Error al subir el video' });
+  }
 };
 
+const registroProductos = async ( datos )=>{
+    
+    const {nombreProducto,categoria,estadoProducto,descripcion} = datos;
+
+    try{
+        
+
+        const newproducto = await producto.create({
+
+            nombre_producto :  nombreProducto, 
+            categoria       :  categoria, 
+            estado_producto :  estadoProducto, 
+            descripcion     :  descripcion, 
+
+         });
+
+        await newproducto.save();
+        
+        return newproducto
+
+
+    }catch(err){
+
+        console.log(err);
+        res.status(500).send(err.message);
+
+    };
+};
 
 const subirCotizaciones = async ( req, res ) => {
 
     try {
-        const Archivos  = req.files; // Accede al archivo subido
-        const datos     = JSON.parse( req.body.data ); // Obtén el nuevo nombre desde el cliente
-      
-        if ( !Archivos || Archivos.length === 0 ) return res.status(400).json({ error: 'No se ha subido ningún archivo' });
-        
-        // console.log(datos)
-        
-        const cotizacion         = await registroCotizaciones(datos);
-        const id                 = cotizacion._id;
-        const imagenesSubidas    = await subirS3(Archivos, id);
-        // Generar un nombre único para el archivo o usar el proporcionado por el cliente
+        const Archivos          = req.files; // Accede al archivo subido
+        const datos             = JSON.parse( req.body.data ); // Obtén el nuevo nombre desde el cliente
+        let imagenesSubidas   = [];
+        const cotizacion        = await registroCotizaciones(datos);
+        const id                = cotizacion._id;
+
        
+       if (Archivos || Archivos.length != 0) {
+          
+          imagenesSubidas = await subirS3(Archivos, id);
+
+        }else{
+
+          return res.status(400).json({ error: 'No se ha subido ningún archivo' });
+
+        };
+        
         res.json({
 
-            mensaje : 'Productos e imagenes subidas correctamente',
-            cotizacion,
-            imagenes: imagenesSubidas,
+          mensaje : 'Productos e imagenes subidas correctamente',
+          cotizacion,
+          imagenes: imagenesSubidas,
             
         });
         
@@ -83,9 +119,8 @@ const subirCotizaciones = async ( req, res ) => {
     }
 };
 
-
 const registroCotizaciones = async ( datos )=>{
-
+  
 console.log("ingreso 1")
 
 const {
@@ -136,8 +171,6 @@ const {
     };
 };
 
-
-
 const cotizacionUser = async (req, res) => {
 
     const usuarioId = req.params.userid;
@@ -182,6 +215,7 @@ const cotizacionModificar = async (req, res) => {
    if (precio === undefined || estado === undefined) return res.status(400).json({error: "no hay valores precio y estado "})
 
   try {
+    
 
     const modiContizacion = await cotizacion.findByIdAndUpdate(
         id,
@@ -203,9 +237,6 @@ const cotizacionModificar = async (req, res) => {
     
   }
 };
-
-
-
 
 const subirS3 = async(Archivos, id, nombreProducto)=>{
 
@@ -248,38 +279,55 @@ const subirS3 = async(Archivos, id, nombreProducto)=>{
 
 }
 
-// ------------------registrar Productos-------------------------------------
+const allmagenes = async (req, res) => {
+  
+    try {
+      const allImagenes = await imagenes.find(); 
+      if(allImagenes.length === 0) return res.status(400).json({ error: 'No se ha subido ningún archivo' });
+  
+      res.json(allImagenes);
+      
+    } catch (error) {
+  
+      console.log(error);
+      res.status(500).send(error.message)
+      
+    }
+};
 
-const registroProductos = async ( datos )=>{
+const filtraImage = async (req, res)=>{
+
+  const {filtro} = req.body
+  
+  if (!filtro) return res.status(400).json({error: "no hay valores precio y estado "});
+  
+  try {
     
-    const {nombreProducto,categoria,estadoProducto,descripcion} = datos;
-
-    try{
-        
-
-        const newproducto = await producto.create({
-
-            nombre_producto :  nombreProducto, 
-            categoria       :  categoria, 
-            estado_producto :  estadoProducto, 
-            descripcion     :  descripcion, 
-
-         });
-
-        await newproducto.save();
-        
-        return newproducto
-
-
-    }catch(err){
-
-        console.log(err);
-        res.status(500).send(err.message);
-
+    const imgenFiltra       =   await producto.find({categoria:filtro});
+    const id                =   imgenFiltra.map((item) => item._id); // Obtener todos los IDs de los productos filtrados
+    const imagenesFiltradas =   [];
+    
+    for ( let i = 0; i < id.length; i++ ) {
+      
+      const filtrar = await imagenes.find({ producto_id: id[i] });
+      imagenesFiltradas.push(...filtrar);
     };
+      
+    res.json({
+      mensaje: 'Productos e imagenes inportadas correctamente',
+      imgenFiltra,
+      imagenesFiltradas
+    });
+
+  
+  } catch (error) {
+    console.log(error);
+    res.status(500).send(error.message) 
+    
+  }
+
 }
 
-//--------------------Registro de sabor--------------------------------
 
 const registroSabores = async ( req , res)=>{
 
@@ -288,10 +336,7 @@ const registroSabores = async ( req , res)=>{
     const {nombreSabor, categoriaSabor, descripcion, estado} = registroSabor;
 
     try{
-        // const isUser = await User.findOne({email: email})
-        // if(isUser){
-        //     return res.json('Usuario ya Existe')
-        // }
+        
 
         const newsabor = await sabor.create({
 
@@ -318,7 +363,6 @@ const registroSabores = async ( req , res)=>{
 
     };
 }
-
 
 const registroPorcioes = async ( req , res)=>{
 
@@ -356,19 +400,18 @@ const registroPorcioes = async ( req , res)=>{
     };
 }
 
-
-
-
 module.exports = {
     
     registroSabores,
     registroPorcioes,
-    SubirImagenes,
+    crearProductos,
     upload,
     subirCotizaciones,
     cotizacionUser,
     cotizacionAll,
     cotizacionModificar,
+    allmagenes,
+    filtraImage,
     
 
 }
